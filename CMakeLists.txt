@@ -4,11 +4,15 @@ project(imu_3dm_gx3)
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
-find_package(catkin REQUIRED roscpp sensor_msgs tf cmake_modules)
+find_package(catkin REQUIRED COMPONENTS
+        roscpp
+        sensor_msgs
+        tf
+        cmake_modules)
 
 ## System dependencies are found with CMake's conventions
 # find_package(Boost REQUIRED COMPONENTS system)
-find_package(Eigen REQUIRED)
+find_package(Eigen3 REQUIRED)
 
 ## Uncomment this if the package has a setup.py. This macro ensures
 ## modules and global scripts declared therein get installed
@@ -89,6 +93,10 @@ catkin_package(
 ## Specify additional locations of header files
 ## Your package locations should be listed before other locations
 # include_directories(include)
+include_directories(
+        # include
+        ${catkin_INCLUDE_DIRS}
+)
 
 ## Declare a cpp library
 add_executable(imu_3dm_gx3

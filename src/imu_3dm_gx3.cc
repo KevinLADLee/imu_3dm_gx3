@@ -13,10 +13,14 @@
 using namespace std;
 
 #define REPLY_LENGTH 4
+#define STOP_CMD_LENGTH 3
+#define MODE_CMD_LENGTH 4
+#define DATA_LENGTH 79
+#define GRAVITY_CONSTANT 9.807
 
 boost::asio::serial_port* serial_port = 0;
-const char stop[3] = {'\xFA','\x75','\xB4'};
-char mode[4] = {'\xD4','\xA3','\x47','\x00'};
+const char stop[3] = {'\xFA','\x75','\xB4'};  // stop continuous mode
+char mode[4] = {'\xD4','\xA3','\x47','\x00'}; // mode cmd array, default to read current mode
 unsigned char reply[REPLY_LENGTH];
 std::string name;
 
@@ -124,13 +128,13 @@ int main(int argc, char** argv)
   serial_port->set_option(stop_bits);
 
   // Stop continous mode if it is running
-  boost::asio::write(*serial_port, boost::asio::buffer(stop, 3));
+  boost::asio::write(*serial_port, boost::asio::buffer(stop, STOP_CMD_LENGTH));
   ROS_WARN("Wait 0.1s"); 
   ros::Duration(0.1).sleep();
 
   // Check the mode
   bool reInitFlag = false;
-  boost::asio::write(*serial_port, boost::asio::buffer(mode, 4));
+  boost::asio::write(*serial_port, boost::asio::buffer(mode, MODE_CMD_LENGTH));
   boost::asio::read(*serial_port, boost::asio::buffer(reply, REPLY_LENGTH));
   if (!validate_checksum(reply, REPLY_LENGTH))
     {
@@ -191,7 +195,8 @@ int main(int argc, char** argv)
         }
     }
 
-  // Set the continous preset mode
+  // Set the continous preset mode (Acceleration, Angular Rate & Magnetometer Vectors & Orientation Matrix)
+  // More detail in '3DM-GX3-25 Single Byte Data Communications Protocol' p21
   const char preset[4] = {'\xD6','\xC6','\x6B','\xCC'};
   boost::asio::write(*serial_port, boost::asio::buffer(preset, 4));
 
@@ -217,35 +222,35 @@ int main(int argc, char** argv)
     }
 
   // Set Timer
+  // Restart the time stamp at the new value
+  // New Timer value equal to 0
   char set_timer[8] = {'\xD7','\xC1','\x29','\x01','\x00','\x00','\x00','\x00'};
   unsigned char reply_timer[7];
   boost::asio::write(*serial_port, boost::asio::buffer(set_timer, 8));
-//  ros::Time t0 = ros::Time::now();  
   boost::asio::read(*serial_port, boost::asio::buffer(reply_timer, 7));
   ros::Time t0 = ros::Time::now();  
 
-  ROS_WARN("Streaming Data...");
-  unsigned short data_length = 79;
-  unsigned char data[data_length];
+  ROS_INFO("Streaming Data...");
+  unsigned char data[DATA_LENGTH];
   sensor_msgs::Imu msg;
   ros::Publisher pub = n.advertise<sensor_msgs::Imu>("imu", 100);
   while (n.ok())
     {
-      boost::asio::read(*serial_port, boost::asio::buffer(data, data_length));
-      if (!validate_checksum(data, data_length))
-        {
+
+      boost::asio::read(*serial_port, boost::asio::buffer(data,  DATA_LENGTH));
+      if (!validate_checksum(data,  DATA_LENGTH)) {
           ROS_ERROR("%s: checksum failed on message", name.c_str());
           continue;
-        }
+      }
 
       unsigned int k = 1;
-      float acc[3];
+      float accel[3];
       float ang_vel[3];
       float mag[3];
       float M[9];
       double T;
       for (unsigned int i = 0; i < 3; i++, k += 4)
-        acc[i] = extract_float(&(data[k]));
+        accel[i] = extract_float(&(data[k]));
       for (unsigned int i = 0; i < 3; i++, k += 4)
         ang_vel[i] = extract_float(&(data[k]));
       for (unsigned int i = 0; i < 3; i++, k += 4)
@@ -259,14 +264,10 @@ int main(int argc, char** argv)
       msg.angular_velocity.x = ang_vel[0];
       msg.angular_velocity.y = ang_vel[1];
       msg.angular_velocity.z = ang_vel[2];
-      msg.linear_acceleration.x = acc[0] * 9.81;
-      msg.linear_acceleration.y = acc[1] * 9.81;
-      msg.linear_acceleration.z = acc[2] * 9.81;
-      // mat R(3,3);
-      // for (unsigned int i = 0; i < 3; i++)
-      //   for (unsigned int j = 0; j < 3; j++)
-      //     R(i,j) = M[j*3+i];
-      // colvec q = R_to_quaternion(R);
+      msg.linear_acceleration.x = accel[0] * GRAVITY_CONSTANT;
+      msg.linear_acceleration.y = accel[1] * GRAVITY_CONSTANT;
+      msg.linear_acceleration.z = accel[2] * GRAVITY_CONSTANT;
+
       Eigen::Matrix3d R;
       for (unsigned int i = 0; i < 3; i++)
         for (unsigned int j = 0; j < 3; j++)
@@ -279,6 +280,8 @@ int main(int argc, char** argv)
       msg.orientation_covariance[0] = mag[0];
       msg.orientation_covariance[1] = mag[1];
       msg.orientation_covariance[2] = mag[2];
+
+
       pub.publish(msg);
     }
 
@@ -289,4 +292,5 @@ int main(int argc, char** argv)
   serial_port->close(); 
 
   return 0;
+  
 }
