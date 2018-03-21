@@ -4,6 +4,7 @@
 #include <deque>
 #include <ros/ros.h>
 #include <sensor_msgs/Imu.h>
+#include <sensor_msgs/MagneticField.h>
 #include <tf/tf.h>
 #include <boost/asio.hpp>
 #include <boost/asio/serial_port.hpp>
@@ -23,6 +24,17 @@ const char stop[3] = {'\xFA','\x75','\xB4'};  // stop continuous mode
 char mode[4] = {'\xD4','\xA3','\x47','\x00'}; // mode cmd array, default to read current mode
 unsigned char reply[REPLY_LENGTH];
 std::string name;
+
+void signal_handler(int signal){
+  if(ros::isInitialized() && ros::isStarted() && ros::ok() && !ros::isShuttingDown()){
+    boost::asio::write(*serial_port, boost::asio::buffer(stop, STOP_CMD_LENGTH));
+    ROS_WARN("Stop imu streaming!");
+    ros::Duration(0.1).sleep();
+    serial_port->close();
+    ROS_INFO("Serial port closed!");
+    ros::shutdown();
+  }
+}
 
 static float extract_float(unsigned char* addr)
 {
@@ -71,7 +83,9 @@ inline void print_bytes(const unsigned char *data, unsigned short length)
 
 int main(int argc, char** argv)
 {
-  ros::init(argc, argv, "imu_3dm_gx3");
+
+  signal(SIGINT,signal_handler);
+  ros::init(argc, argv, "imu_3dm_gx3", ros::init_options::NoSigintHandler);
   ros::NodeHandle n("~");
 
   name = ros::this_node::getName();
@@ -232,8 +246,10 @@ int main(int argc, char** argv)
 
   ROS_INFO("Streaming Data...");
   unsigned char data[DATA_LENGTH];
-  sensor_msgs::Imu msg;
-  ros::Publisher pub = n.advertise<sensor_msgs::Imu>("imu", 100);
+  sensor_msgs::Imu imu_msg;
+  sensor_msgs::MagneticField mag_msg;
+  ros::Publisher imu_pub = n.advertise<sensor_msgs::Imu>("imu", 100);
+  ros::Publisher mag_pub = n.advertise<sensor_msgs::MagneticField>("magnetic", 100);
   while (n.ok())
     {
 
@@ -259,38 +275,44 @@ int main(int argc, char** argv)
         M[i] = extract_float(&(data[k]));
       T = extract_int(&(data[k])) / 62500.0;
 
-      msg.header.stamp    = t0 + ros::Duration(T) - ros::Duration(delay);
-      msg.header.frame_id = frame_id;
-      msg.angular_velocity.x = ang_vel[0];
-      msg.angular_velocity.y = ang_vel[1];
-      msg.angular_velocity.z = ang_vel[2];
-      msg.linear_acceleration.x = accel[0] * GRAVITY_CONSTANT;
-      msg.linear_acceleration.y = accel[1] * GRAVITY_CONSTANT;
-      msg.linear_acceleration.z = accel[2] * GRAVITY_CONSTANT;
+      imu_msg.header.stamp    = t0 + ros::Duration(T) - ros::Duration(delay);
+      imu_msg.header.frame_id = frame_id;
+      imu_msg.angular_velocity.x = ang_vel[0];
+      imu_msg.angular_velocity.y = ang_vel[1];
+      imu_msg.angular_velocity.z = ang_vel[2];
+      imu_msg.linear_acceleration.x = accel[0] * GRAVITY_CONSTANT;
+      imu_msg.linear_acceleration.y = accel[1] * GRAVITY_CONSTANT;
+      imu_msg.linear_acceleration.z = accel[2] * GRAVITY_CONSTANT;
 
       Eigen::Matrix3d R;
       for (unsigned int i = 0; i < 3; i++)
         for (unsigned int j = 0; j < 3; j++)
           R(i,j) = M[j*3+i];
       Eigen::Quaternion<double> q(R);
-      msg.orientation.w = (double)q.w();// q(0);
-      msg.orientation.x = (double)q.x();// q(1);
-      msg.orientation.y = (double)q.y();// q(2);
-      msg.orientation.z = (double)q.z();// q(3);
-      msg.orientation_covariance[0] = mag[0];
-      msg.orientation_covariance[1] = mag[1];
-      msg.orientation_covariance[2] = mag[2];
+      imu_msg.orientation.w = (double)q.w();// q(0);
+      imu_msg.orientation.x = (double)q.x();// q(1);
+      imu_msg.orientation.y = (double)q.y();// q(2);
+      imu_msg.orientation.z = (double)q.z();// q(3);
+      imu_msg.orientation_covariance[0] = -1;
 
+      imu_pub.publish(imu_msg);
 
-      pub.publish(msg);
+      mag_msg.header.stamp    = t0 + ros::Duration(T) - ros::Duration(delay);
+      mag_msg.header.frame_id = frame_id;
+      mag_msg.magnetic_field.x = mag[0];
+      mag_msg.magnetic_field.y = mag[1];
+      mag_msg.magnetic_field.z = mag[2];
+
+      mag_pub.publish(mag_msg);
+
     }
 
   // Stop continous and close device
-  boost::asio::write(*serial_port, boost::asio::buffer(stop, 3));
+  boost::asio::write(*serial_port, boost::asio::buffer(stop, STOP_CMD_LENGTH));
   ROS_WARN("Wait 0.1s"); 
   ros::Duration(0.1).sleep();
   serial_port->close(); 
 
   return 0;
-  
+
 }
